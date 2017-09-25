@@ -605,6 +605,8 @@ public class IgniteTxHandler {
         if (expVer.equals(curVer))
             return false;
 
+        // TODO IGNITE-3478 check mvcc crd for mvcc enabled txs.
+
         for (IgniteTxEntry e : F.concat(false, req.reads(), req.writes())) {
             GridCacheContext ctx = e.context();
 

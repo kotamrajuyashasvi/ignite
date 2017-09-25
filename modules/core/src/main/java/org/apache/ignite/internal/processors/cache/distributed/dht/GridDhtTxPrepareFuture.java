@@ -1234,7 +1234,7 @@ public final class GridDhtTxPrepareFuture extends GridCacheCompoundFuture<Ignite
             if (req.requestMvccCounter()) {
                 assert tx.txState().mvccEnabled(cctx);
 
-                ClusterNode crd = cctx.coordinators().coordinator(tx.topologyVersion());
+                ClusterNode crd = cctx.coordinators().currentCoordinator();
 
                 assert crd != null : tx.topologyVersion();
 

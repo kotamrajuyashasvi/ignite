@@ -238,6 +238,10 @@ public class GridCacheAffinityManager extends GridCacheManagerAdapter {
         return aff0.cachedAffinity(topVer);
     }
 
+    public ClusterNode mvccCoordinator(AffinityTopologyVersion topVer) {
+        return assignment(topVer).mvccCoordinator();
+    }
+
     /**
      * @param key Key to check.
      * @param topVer Topology version.

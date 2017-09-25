@@ -44,7 +44,6 @@ import org.apache.ignite.internal.util.GridAtomicLong;
 import org.apache.ignite.internal.util.GridLongList;
 import org.apache.ignite.internal.util.future.GridCompoundFuture;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
-import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteInClosure;
 import org.jetbrains.annotations.Nullable;
@@ -72,7 +71,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
     private static final byte MSG_POLICY = SYSTEM_POOL;
     
     /** */
-    private final CoordinatorAssignmentHistory assignHist = new CoordinatorAssignmentHistory();
+    private volatile Coordinator curCrd;
 
     /** */
     private final AtomicLong mvccCntr = new AtomicLong(1L);
@@ -144,7 +143,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
      * @return Counter.
      */
     public MvccCoordinatorVersion requestTxCounterOnCoordinator(IgniteInternalTx tx) {
-        assert cctx.localNode().equals(assignHist.currentCoordinator());
+        assert cctx.localNode().equals(currentCoordinator());
 
         return assignTxCounter(tx.nearXidVersion(), 0L);
     }
@@ -682,43 +681,48 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
         }
     }
 
-    /**
-     * @param topVer Topology version.
-     * @return MVCC coordinator for given topology version.
-     */
-    @Nullable public ClusterNode coordinator(AffinityTopologyVersion topVer) {
-        return assignHist.coordinator(topVer);
+    public ClusterNode currentCoordinator() {
+        Coordinator crd = curCrd;
+
+        return crd != null ? crd.crd : null;
+    }
+
+    public ClusterNode currentCoordinatorForCacheAffinity(AffinityTopologyVersion topVer) {
+        Coordinator crd = curCrd;
+
+        assert crd == null || crd.topVer.compareTo(topVer) <= 0 : crd;
+
+        return crd != null ? crd.crd : null;
     }
 
     /**
      * @param discoCache Discovery snapshot.
      */
-    public void assignCoordinator(DiscoCache discoCache) {
-        ClusterNode curCrd = assignHist.currentCoordinator();
+    public ClusterNode reassignCoordinator(DiscoCache discoCache) {
+        ClusterNode curCrd = currentCoordinator();
 
-        if (curCrd == null || !discoCache.allNodes().contains(curCrd)) {
-            ClusterNode newCrd = null;
+        assert curCrd == null || !discoCache.allNodes().contains(curCrd) : curCrd;
 
-            if (!discoCache.serverNodes().isEmpty())
-                newCrd = discoCache.serverNodes().get(0);
+        ClusterNode newCrd;
 
-            if (!F.eq(curCrd, newCrd)) {
-                assignHist.addAssignment(discoCache.version(), newCrd);
+        if (!discoCache.serverNodes().isEmpty()) {
+            newCrd = discoCache.serverNodes().get(0);
 
-                if (cctx.localNode().equals(newCrd)) {
-                    crdVer = discoCache.version().topologyVersion();
+            if (cctx.localNode().equals(newCrd)) {
+                crdVer = discoCache.version().topologyVersion();
 
-                    crdLatch.countDown();
-                }
-
-                log.info("Assigned mvcc coordinator [topVer=" + discoCache.version() +
-                    ", crd=" + newCrd + ']');
-
-                return;
+                crdLatch.countDown();
             }
-        }
 
-        assignHist.addAssignment(discoCache.version(), curCrd);
+            log.info("Assigned mvcc coordinator [topVer=" + discoCache.version() +
+                ", crd=" + newCrd + ']');
+        }
+        else
+            newCrd = null;
+
+        this.curCrd = new Coordinator(newCrd, discoCache.version());
+
+        return newCrd;
     }
 
     /**
@@ -994,6 +998,22 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
          */
         WaitTxFuture(long txId) {
             this.txId = txId;
+        }
+    }
+
+    /**
+     *
+     */
+    static class Coordinator {
+        /** */
+        final ClusterNode crd;
+
+        /** */
+        final AffinityTopologyVersion topVer;
+
+        Coordinator(ClusterNode crd, AffinityTopologyVersion topVer) {
+            this.crd = crd;
+            this.topVer = topVer;
         }
     }
 }

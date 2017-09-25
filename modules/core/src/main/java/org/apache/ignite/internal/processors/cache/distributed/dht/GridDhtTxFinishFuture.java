@@ -295,7 +295,7 @@ public final class GridDhtTxFinishFuture<K, V> extends GridCacheCompoundIdentity
         GridLongList waitTxs = tx.mvccWaitTransactions();
 
         if (waitTxs != null) {
-            ClusterNode crd = cctx.coordinators().coordinator(tx.topologyVersion());
+            ClusterNode crd = cctx.coordinators().currentCoordinator();
 
             assert crd != null;
 

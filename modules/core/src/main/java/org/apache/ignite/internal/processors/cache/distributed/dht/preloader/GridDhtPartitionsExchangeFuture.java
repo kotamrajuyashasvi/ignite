@@ -26,6 +26,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -552,7 +553,21 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
 
             boolean crdNode = crd != null && crd.isLocal();
 
-            exchCtx = new ExchangeContext(crdNode, this);
+            boolean mvccCrdChange = false;
+
+            if (localJoinExchange())
+                cctx.coordinators().reassignCoordinator(firstEvtDiscoCache);
+            else if (exchId.isLeft()){
+                ClusterNode mvccCrd = cctx.coordinators().currentCoordinator();
+
+                if (mvccCrd != null && mvccCrd.equals(exchId.eventNode())) {
+                    ClusterNode newMvccCrd = cctx.coordinators().reassignCoordinator(firstEvtDiscoCache);
+
+                    mvccCrdChange = !Objects.equals(mvccCrd, newMvccCrd);
+                }
+            }
+
+            exchCtx = new ExchangeContext(crdNode, mvccCrdChange, this);
 
             assert state == null : state;
 
@@ -1418,8 +1433,6 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
         }
 
         if (err == null) {
-            cctx.coordinators().assignCoordinator(exchCtx.events().discoveryCache());
-
             if (centralizedAff) {
                 assert !exchCtx.mergeExchanges();
 

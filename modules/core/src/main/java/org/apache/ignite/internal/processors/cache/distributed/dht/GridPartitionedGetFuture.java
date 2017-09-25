@@ -154,7 +154,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
 
         // TODO IGNITE-3478 (correct failover and remap).
         if (cctx.mvccEnabled()) {
-            mvccCrd = cctx.shared().coordinators().coordinator(topVer);
+            mvccCrd = cctx.affinity().mvccCoordinator(topVer);
 
             if (mvccCrd == null) {
                 onDone(new ClusterTopologyCheckedException("Mvcc coordinator is not assigned: " + topVer));

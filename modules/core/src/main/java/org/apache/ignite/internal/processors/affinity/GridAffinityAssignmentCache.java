@@ -184,10 +184,22 @@ public class GridAffinityAssignmentCache {
      * @param affAssignment Affinity assignment for topology version.
      */
     public void initialize(AffinityTopologyVersion topVer, List<List<ClusterNode>> affAssignment) {
+        ClusterNode mvccCrd = ctx.cache().context().coordinators().currentCoordinatorForCacheAffinity(topVer);
+
+        initialize(topVer, affAssignment, mvccCrd);
+    }
+
+    /**
+     * Initializes affinity with given topology version and assignment.
+     *
+     * @param topVer Topology version.
+     * @param affAssignment Affinity assignment for topology version.
+     */
+    private void initialize(AffinityTopologyVersion topVer, List<List<ClusterNode>> affAssignment, ClusterNode mvccCrd) {
         assert topVer.compareTo(lastVersion()) >= 0 : "[topVer = " + topVer + ", last=" + lastVersion() + ']';
         assert idealAssignment != null;
 
-        GridAffinityAssignment assignment = new GridAffinityAssignment(topVer, affAssignment, idealAssignment);
+        GridAffinityAssignment assignment = new GridAffinityAssignment(topVer, affAssignment, idealAssignment, mvccCrd);
 
         affCache.put(topVer, new HistoryAffinityAssignment(assignment));
         head.set(assignment);
@@ -570,7 +582,9 @@ public class GridAffinityAssignmentCache {
 
         idealAssignment(aff.idealAssignment());
 
-        initialize(aff.lastVersion(), aff.assignments(aff.lastVersion()));
+        AffinityAssignment assign = aff.cachedAffinity(aff.lastVersion());
+
+        initialize(aff.lastVersion(), assign.assignment(), assign.mvccCoordinator());
     }
 
     /**

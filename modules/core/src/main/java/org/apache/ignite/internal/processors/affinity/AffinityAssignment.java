@@ -85,4 +85,6 @@ public interface AffinityAssignment {
      * @return Backup partitions for specified node ID.
      */
     public Set<Integer> backupPartitions(UUID nodeId);
+
+    public ClusterNode mvccCoordinator();
 }

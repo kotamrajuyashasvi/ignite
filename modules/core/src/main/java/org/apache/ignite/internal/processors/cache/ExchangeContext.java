@@ -51,17 +51,22 @@ public class ExchangeContext {
     /** */
     private final boolean compatibilityNode = getBoolean(IGNITE_EXCHANGE_COMPATIBILITY_VER_1, false);
 
+    /** */
+    private final boolean mvccCrdChange;
+
     /**
      * @param crd Coordinator flag.
      * @param fut Exchange future.
      */
-    public ExchangeContext(boolean crd, GridDhtPartitionsExchangeFuture fut) {
+    public ExchangeContext(boolean crd, boolean mvccCrdChange, GridDhtPartitionsExchangeFuture fut) {
+        this.mvccCrdChange = mvccCrdChange;
+
         int protocolVer = exchangeProtocolVersion(fut.firstEventCache().minimumNodeVersion());
 
         if (compatibilityNode || (crd && fut.localJoinExchange())) {
             fetchAffOnJoin = true;
 
-            merge = false;
+            merge = !mvccCrdChange;
         }
         else {
             boolean startCaches = fut.exchangeId().isJoined() &&
@@ -69,7 +74,8 @@ public class ExchangeContext {
 
             fetchAffOnJoin = protocolVer == 1;
 
-            merge = !startCaches &&
+            merge = !mvccCrdChange &&
+                !startCaches &&
                 protocolVer > 1 &&
                 fut.firstEvent().type() != EVT_DISCOVERY_CUSTOM_EVT;
         }
@@ -122,6 +128,13 @@ public class ExchangeContext {
      */
     public boolean mergeExchanges() {
         return merge;
+    }
+
+    /**
+     * @return {@code True} if mvcc coordinator node is changed during this exchange.
+     */
+    public boolean mvccCoordinatorChange() {
+        return mvccCrdChange;
     }
 
     /** {@inheritDoc} */
