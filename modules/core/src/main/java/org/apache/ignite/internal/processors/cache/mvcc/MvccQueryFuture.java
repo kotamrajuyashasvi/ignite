@@ -18,10 +18,11 @@
 package org.apache.ignite.internal.processors.cache.mvcc;
 
 import org.apache.ignite.cluster.ClusterNode;
+import org.jetbrains.annotations.Nullable;
 
 /**
  *
  */
 public interface MvccQueryFuture {
-    void coordinatorChanged(ClusterNode node);
+    @Nullable public MvccCoordinatorVersion onCoordinatorChange(ClusterNode oldCrd, ClusterNode newCrd);
 }

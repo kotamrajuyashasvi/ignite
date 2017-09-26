@@ -42,6 +42,7 @@ import org.apache.ignite.internal.processors.cache.GridCacheMessage;
 import org.apache.ignite.internal.processors.cache.IgniteCacheExpiryPolicy;
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryFuture;
 import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetRequest;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetResponse;
@@ -65,7 +66,7 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Colocated get future.
  */
-public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAdapter<K, V> {
+public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAdapter<K, V> implements MvccQueryFuture {
     /** */
     private static final long serialVersionUID = 0L;
 
@@ -136,6 +137,11 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
             log = U.logger(cctx.kernalContext(), logRef, GridPartitionedGetFuture.class);
     }
 
+    /** {@inheritDoc} */
+    @Nullable @Override public MvccCoordinatorVersion onCoordinatorChange(ClusterNode oldCrd, ClusterNode newCrd) {
+        return null;
+    }
+
     /**
      * Initializes future.
      */
@@ -154,32 +160,6 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
 
         // TODO IGNITE-3478 (correct failover and remap).
         if (cctx.mvccEnabled()) {
-            mvccCrd = cctx.affinity().mvccCoordinator(topVer);
-
-            if (mvccCrd == null) {
-                onDone(new ClusterTopologyCheckedException("Mvcc coordinator is not assigned: " + topVer));
-
-                return;
-            }
-
-            IgniteInternalFuture<MvccCoordinatorVersion> cntrFut = cctx.shared().coordinators().requestQueryCounter(mvccCrd);
-
-            cntrFut.listen(new IgniteInClosure<IgniteInternalFuture<MvccCoordinatorVersion>>() {
-                @Override public void apply(IgniteInternalFuture<MvccCoordinatorVersion> fut) {
-                    try {
-                        mvccVer = fut.get();
-
-                        map(keys,
-                            Collections.<ClusterNode, LinkedHashMap<KeyCacheObject, Boolean>>emptyMap(),
-                            GridPartitionedGetFuture.this.topVer);
-
-                        markInitialized();
-                    }
-                    catch (IgniteCheckedException e) {
-                        onDone(e);
-                    }
-                }
-            });
 
             return;
         }
@@ -187,6 +167,45 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
         map(keys, Collections.<ClusterNode, LinkedHashMap<KeyCacheObject, Boolean>>emptyMap(), topVer);
 
         markInitialized();
+    }
+
+    /**
+     *
+     */
+    private void requestMvccVersion(final AffinityTopologyVersion topVer) {
+        mvccCrd = cctx.affinity().mvccCoordinator(topVer);
+
+        if (mvccCrd == null) {
+            onDone(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
+
+            return;
+        }
+
+        IgniteInternalFuture<MvccCoordinatorVersion> cntrFut = cctx.shared().coordinators().requestQueryCounter(mvccCrd);
+
+        cntrFut.listen(new IgniteInClosure<IgniteInternalFuture<MvccCoordinatorVersion>>() {
+            @Override public void apply(IgniteInternalFuture<MvccCoordinatorVersion> fut) {
+                try {
+                    mvccVer = fut.get();
+
+                    map(keys,
+                        Collections.<ClusterNode, LinkedHashMap<KeyCacheObject, Boolean>>emptyMap(),
+                        topVer);
+
+                    markInitialized();
+                }
+                catch (ClusterTopologyCheckedException e) {
+                    if (canRemap) {
+
+                    }
+                    else
+                        onDone(new ClusterTopologyCheckedException("Failed to request mvcc version, coordinator failed: " + mvccCrd));
+                }
+                catch (IgniteCheckedException e) {
+                    onDone(e);
+                }
+            }
+        });
     }
 
     /** {@inheritDoc} */

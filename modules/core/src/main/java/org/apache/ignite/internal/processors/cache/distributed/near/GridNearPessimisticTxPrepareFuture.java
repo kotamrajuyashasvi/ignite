@@ -39,6 +39,7 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxMapp
 import org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsSharedManager;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccResponseListener;
+import org.apache.ignite.internal.processors.cache.mvcc.TxMvccInfo;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxEntry;
 import org.apache.ignite.internal.transactions.IgniteTxRollbackCheckedException;
@@ -271,16 +272,6 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
 
         ClusterNode mvccCrd = null;
 
-        if (tx.txState().mvccEnabled(cctx)) {
-            mvccCrd = cctx.coordinators().coordinator(topVer);
-
-            if (mvccCrd == null) {
-                onDone(new ClusterTopologyCheckedException("Mvcc coordinator is not assigned: " + topVer));
-
-                return;
-            }
-        }
-
         GridDhtTxMapping txMapping = new GridDhtTxMapping();
 
         boolean hasNearCache = false;
@@ -303,6 +294,16 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
             else
                 nodes = cacheCtx.affinity().nodesByKey(txEntry.key(), topVer);
 
+            if (mvccCrd == null && cacheCtx.mvccEnabled()) {
+                mvccCrd = cacheCtx.affinity().mvccCoordinator(topVer);
+
+                if (mvccCrd == null) {
+                    onDone(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
+
+                    return;
+                }
+            }
+
             if (F.isEmpty(nodes)) {
                 onDone(new ClusterTopologyServerNotFoundException("Failed to map keys to nodes (partition " +
                     "is not mapped to any node) [key=" + txEntry.key() +
@@ -324,6 +325,8 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
 
             txMapping.addMapping(nodes);
         }
+
+        assert !tx.txState().mvccEnabled(cctx) || mvccCrd != null;
 
         tx.transactionNodes(txMapping.transactionNodes());
 
@@ -430,7 +433,7 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
             if (mvccCrd.isLocal()) {
                 MvccCoordinatorVersion mvccVer = cctx.coordinators().requestTxCounterOnCoordinator(tx);
 
-                tx.mvccCoordinatorVersion(mvccVer);
+                onMvccResponse(cctx.localNodeId(), mvccVer);
             }
             else {
                 IgniteInternalFuture<Long> cntrFut = cctx.coordinators().requestTxCounter(mvccCrd, this, tx.nearXidVersion());
@@ -443,8 +446,8 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
     }
 
     /** {@inheritDoc} */
-    @Override public void onMvccResponse(MvccCoordinatorVersion res) {
-        tx.mvccCoordinatorVersion(res);
+    @Override public void onMvccResponse(UUID crdId, MvccCoordinatorVersion res) {
+        tx.mvccInfo(new TxMvccInfo(crdId, res));
     }
 
     /** {@inheritDoc} */
@@ -544,8 +547,8 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
             if (res.error() != null)
                 onError(res.error());
             else {
-                if (res.mvccCoordinatorVersion() != null)
-                    tx.mvccCoordinatorVersion(res.mvccCoordinatorVersion());
+                if (res.mvccInfo() != null)
+                    tx.mvccInfo(res.mvccInfo());
 
                 onPrepareResponse(m, res, updateMapping);
 

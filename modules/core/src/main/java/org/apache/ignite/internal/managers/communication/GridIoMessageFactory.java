@@ -110,6 +110,7 @@ import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorFutureRespons
 import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorTxCounterRequest;
 import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorWaitTxsRequest;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersionResponse;
+import org.apache.ignite.internal.processors.cache.mvcc.TxMvccInfo;
 import org.apache.ignite.internal.processors.cache.query.GridCacheQueryRequest;
 import org.apache.ignite.internal.processors.cache.query.GridCacheQueryResponse;
 import org.apache.ignite.internal.processors.cache.query.GridCacheSqlQuery;
@@ -920,6 +921,11 @@ public class GridIoMessageFactory implements MessageFactory {
 
             case 138:
                 msg = new GridCacheMvccEntryInfo();
+
+                return msg;
+
+            case 139:
+                msg = new TxMvccInfo();
 
                 return msg;
 

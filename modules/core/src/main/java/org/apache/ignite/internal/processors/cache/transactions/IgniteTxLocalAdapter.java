@@ -518,7 +518,7 @@ public abstract class IgniteTxLocalAdapter extends IgniteTxAdapter implements Ig
             try {
                 cctx.tm().txContext(this);
 
-                assert !txState.mvccEnabled(cctx) || mvccVer != null;
+                assert !txState.mvccEnabled(cctx) || mvccInfo != null;
 
                 AffinityTopologyVersion topVer = topologyVersion();
 
@@ -698,7 +698,7 @@ public abstract class IgniteTxLocalAdapter extends IgniteTxAdapter implements Ig
                                             resolveTaskName(),
                                             dhtVer,
                                             null,
-                                            mvccVer);
+                                            mvccInfo != null ? mvccInfo.version() : null);
 
                                         if (updRes.success()) {
                                             txEntry.updateCounter(updRes.updatePartitionCounter());
@@ -736,7 +736,7 @@ public abstract class IgniteTxLocalAdapter extends IgniteTxAdapter implements Ig
                                                 resolveTaskName(),
                                                 dhtVer,
                                                 null,
-                                                mvccVer);
+                                                mvccInfo != null ? mvccInfo.version() : null);
                                         }
                                     }
                                     else if (op == DELETE) {
@@ -758,7 +758,7 @@ public abstract class IgniteTxLocalAdapter extends IgniteTxAdapter implements Ig
                                             resolveTaskName(),
                                             dhtVer,
                                             null,
-                                            mvccVer);
+                                            mvccInfo != null ? mvccInfo.version() : null);
 
                                         if (updRes.success())
                                             txEntry.updateCounter(updRes.updatePartitionCounter());
@@ -782,7 +782,7 @@ public abstract class IgniteTxLocalAdapter extends IgniteTxAdapter implements Ig
                                                 resolveTaskName(),
                                                 dhtVer,
                                                 null,
-                                                mvccVer);
+                                                mvccInfo != null ? mvccInfo.version() : null);
                                         }
                                     }
                                     else if (op == RELOAD) {

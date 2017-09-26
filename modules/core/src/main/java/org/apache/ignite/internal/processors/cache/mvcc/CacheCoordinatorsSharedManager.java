@@ -235,22 +235,22 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
     }
 
     /**
-     * @param crd Coordinator.
+     * @param crdId Coordinator ID.
      * @param txs Transaction IDs.
      * @return Future.
      */
-    public IgniteInternalFuture<Void> waitTxsFuture(ClusterNode crd, GridLongList txs) {
-        assert crd != null;
+    public IgniteInternalFuture<Void> waitTxsFuture(UUID crdId, GridLongList txs) {
+        assert crdId != null;
         assert txs != null && txs.size() > 0;
 
         // TODO IGNITE-3478: special case for local?
 
-        WaitAckFuture fut = new WaitAckFuture(futIdCntr.incrementAndGet(), crd, false);
+        WaitAckFuture fut = new WaitAckFuture(futIdCntr.incrementAndGet(), crdId, false);
 
         ackFuts.put(fut.id, fut);
 
         try {
-            cctx.gridIO().sendToGridTopic(crd,
+            cctx.gridIO().sendToGridTopic(crdId,
                 MSG_TOPIC,
                 new CoordinatorWaitTxsRequest(fut.id, txs),
                 MSG_POLICY);
@@ -272,7 +272,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
      * @param mvccVer Transaction version.
      * @return Acknowledge future.
      */
-    public IgniteInternalFuture<Void> ackTxCommit(ClusterNode crd, MvccCoordinatorVersion mvccVer) {
+    public IgniteInternalFuture<Void> ackTxCommit(UUID crd, MvccCoordinatorVersion mvccVer) {
         assert crd != null;
         assert mvccVer != null;
 
@@ -299,26 +299,26 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
     }
 
     /**
-     * @param crd Coordinator.
+     * @param crdId Coordinator node ID.
      * @param mvccVer Transaction version.
      */
-    public void ackTxRollback(ClusterNode crd, MvccCoordinatorVersion mvccVer) {
+    public void ackTxRollback(UUID crdId, MvccCoordinatorVersion mvccVer) {
         CoordinatorTxAckRequest msg = new CoordinatorTxAckRequest(0, mvccVer.counter());
 
         msg.skipResponse(true);
 
         try {
-            cctx.gridIO().sendToGridTopic(crd,
+            cctx.gridIO().sendToGridTopic(crdId,
                 MSG_TOPIC,
                 msg,
                 MSG_POLICY);
         }
         catch (ClusterTopologyCheckedException e) {
             if (log.isDebugEnabled())
-                log.debug("Failed to send tx rollback ack, node left [msg=" + msg + ", node=" + crd.id() + ']');
+                log.debug("Failed to send tx rollback ack, node left [msg=" + msg + ", node=" + crdId + ']');
         }
         catch (IgniteCheckedException e) {
-            U.error(log, "Failed to send tx rollback ack [msg=" + msg + ", node=" + crd.id() + ']', e);
+            U.error(log, "Failed to send tx rollback ack [msg=" + msg + ", node=" + crdId + ']', e);
         }
     }
 
@@ -761,7 +761,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
             assert res.counter() != COUNTER_NA;
 
             if (lsnr != null)
-                lsnr.onMvccResponse(res);
+                lsnr.onMvccResponse(crd.id(), res);
 
             onDone(res);
         }
@@ -801,7 +801,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
         private final long id;
 
         /** */
-        private final ClusterNode crd;
+        private final UUID crdId;
 
         /** */
         long startTime;
@@ -811,11 +811,11 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
 
         /**
          * @param id Future ID.
-         * @param crd Coordinator.
+         * @param crdId Coordinator node ID.
          */
-        WaitAckFuture(long id, ClusterNode crd, boolean ackTx) {
+        WaitAckFuture(long id, UUID crdId, boolean ackTx) {
             this.id = id;
-            this.crd = crd;
+            this.crdId = crdId;
             this.ackTx = ackTx;
 
             if (STAT_CNTRS)
@@ -833,13 +833,13 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
          * @param nodeId Failed node ID.
          */
         void onNodeLeft(UUID nodeId) {
-            if (crd.id().equals(nodeId) && verFuts.remove(id) != null)
+            if (crdId.equals(nodeId) && verFuts.remove(id) != null)
                 onDone();
         }
 
         /** {@inheritDoc} */
         @Override public String toString() {
-            return "WaitAckFuture [crd=" + crd + ", id=" + id + ']';
+            return "WaitAckFuture [crdId=" + crdId + ", id=" + id + ']';
         }
     }
 

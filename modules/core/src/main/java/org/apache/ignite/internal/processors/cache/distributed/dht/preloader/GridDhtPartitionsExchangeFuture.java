@@ -561,9 +561,13 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 ClusterNode mvccCrd = cctx.coordinators().currentCoordinator();
 
                 if (mvccCrd != null && mvccCrd.equals(exchId.eventNode())) {
+                    assert !CU.clientNode(mvccCrd) : mvccCrd;
+
                     ClusterNode newMvccCrd = cctx.coordinators().reassignCoordinator(firstEvtDiscoCache);
 
-                    mvccCrdChange = !Objects.equals(mvccCrd, newMvccCrd);
+                    assert !F.eq(mvccCrd, newMvccCrd);
+
+                    mvccCrdChange = newMvccCrd != null;
                 }
             }
 
