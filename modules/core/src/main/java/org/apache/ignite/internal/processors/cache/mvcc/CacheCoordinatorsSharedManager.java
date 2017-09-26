@@ -17,6 +17,7 @@
 
 package org.apache.ignite.internal.processors.cache.mvcc;
 
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -71,7 +72,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
     private static final byte MSG_POLICY = SYSTEM_POOL;
     
     /** */
-    private volatile Coordinator curCrd;
+    private volatile MvccCoordinator curCrd;
 
     /** */
     private final AtomicLong mvccCntr = new AtomicLong(1L);
@@ -105,6 +106,23 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
 
     /** */
     private StatCounter[] statCntrs;
+
+    /**
+     * @param ver1 First version.
+     * @param ver2 Second version.
+     * @return
+     */
+    public static int compareVersions(MvccCoordinatorVersion ver1, MvccCoordinatorVersion ver2) {
+        assert ver1 != null;
+        assert ver2 != null;
+
+        int cmp = Long.compare(ver1.coordinatorVersion(), ver2.coordinatorVersion());
+
+        if (cmp != 0)
+            return cmp;
+
+        return Long.compare(ver1.counter(), ver2.counter());
+    }
 
     /** {@inheritDoc} */
     @Override protected void start0() throws IgniteCheckedException {
@@ -143,7 +161,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
      * @return Counter.
      */
     public MvccCoordinatorVersion requestTxCounterOnCoordinator(IgniteInternalTx tx) {
-        assert cctx.localNode().equals(currentCoordinator());
+        assert cctx.localNode().equals(currentCoordinatorNode());
 
         return assignTxCounter(tx.nearXidVersion(), 0L);
     }
@@ -681,48 +699,52 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
         }
     }
 
-    public ClusterNode currentCoordinator() {
-        Coordinator crd = curCrd;
-
-        return crd != null ? crd.crd : null;
+    public MvccCoordinator currentCoordinator() {
+        return curCrd;
     }
 
-    public ClusterNode currentCoordinatorForCacheAffinity(AffinityTopologyVersion topVer) {
-        Coordinator crd = curCrd;
+    public ClusterNode currentCoordinatorNode() {
+        MvccCoordinator curCrd = this.curCrd;
 
-        assert crd == null || crd.topVer.compareTo(topVer) <= 0 : crd;
+        return curCrd != null ? curCrd.node() : null;
+    }
 
-        return crd != null ? crd.crd : null;
+    public MvccCoordinator currentCoordinatorForCacheAffinity(AffinityTopologyVersion topVer) {
+        MvccCoordinator crd = curCrd;
+
+        // Assert coordinator did not already change.
+        assert crd == null || crd.topologyVersion().compareTo(topVer) <= 0 : crd;
+
+        return crd;
     }
 
     /**
      * @param discoCache Discovery snapshot.
      */
-    public ClusterNode reassignCoordinator(DiscoCache discoCache) {
-        ClusterNode curCrd = currentCoordinator();
-
-        assert curCrd == null || !discoCache.allNodes().contains(curCrd) : curCrd;
-
-        ClusterNode newCrd;
+    public MvccCoordinator reassignCoordinator(DiscoCache discoCache) {
+        assert curCrd == null || !discoCache.allNodes().contains(curCrd.node()) : curCrd;
 
         if (!discoCache.serverNodes().isEmpty()) {
-            newCrd = discoCache.serverNodes().get(0);
-
-            if (cctx.localNode().equals(newCrd)) {
-                crdVer = discoCache.version().topologyVersion();
-
-                crdLatch.countDown();
-            }
+            curCrd = new MvccCoordinator(discoCache.serverNodes().get(0), discoCache.version());
 
             log.info("Assigned mvcc coordinator [topVer=" + discoCache.version() +
-                ", crd=" + newCrd + ']');
+                ", crd=" + curCrd.node().id() + ']');
         }
         else
-            newCrd = null;
+            curCrd = null;
 
-        this.curCrd = new Coordinator(newCrd, discoCache.version());
+        return curCrd;
+    }
 
-        return newCrd;
+    public void initCoordinator(AffinityTopologyVersion topVer, @Nullable Map<MvccCounter, Integer> activeQrys) {
+        assert cctx.localNode().equals(curCrd.node());
+
+        log.info("Initialize local node as mvcc coordinator [node=" + cctx.localNodeId() +
+            ", topVer=" + topVer + ']');
+
+        crdVer = topVer.topologyVersion();
+
+        crdLatch.countDown();
     }
 
     /**
@@ -998,22 +1020,6 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
          */
         WaitTxFuture(long txId) {
             this.txId = txId;
-        }
-    }
-
-    /**
-     *
-     */
-    static class Coordinator {
-        /** */
-        final ClusterNode crd;
-
-        /** */
-        final AffinityTopologyVersion topVer;
-
-        Coordinator(ClusterNode crd, AffinityTopologyVersion topVer) {
-            this.crd = crd;
-            this.topVer = topVer;
         }
     }
 }

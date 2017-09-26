@@ -41,6 +41,7 @@ import org.apache.ignite.internal.processors.cache.GridCacheEntryRemovedExceptio
 import org.apache.ignite.internal.processors.cache.GridCacheMessage;
 import org.apache.ignite.internal.processors.cache.IgniteCacheExpiryPolicy;
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryFuture;
 import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
@@ -77,7 +78,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
     private static IgniteLogger log;
 
     /** */
-    private ClusterNode mvccCrd;
+    private MvccCoordinator mvccCrd;
 
     /** */
     private MvccCoordinatorVersion mvccVer;
@@ -128,11 +129,6 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
             log = U.logger(cctx.kernalContext(), logRef, GridPartitionedGetFuture.class);
     }
 
-    /** {@inheritDoc} */
-    @Nullable @Override public MvccCoordinatorVersion onCoordinatorChange(ClusterNode oldCrd, ClusterNode newCrd) {
-        return null;
-    }
-
     /**
      * Initializes future.
      *
@@ -151,22 +147,51 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                 canRemap ? cctx.affinity().affinityTopologyVersion() : cctx.shared().exchange().readyAffinityVersion();
         }
 
-        // TODO IGNITE-3478 (correct failover and remap).
         if (cctx.mvccEnabled()) {
+            trackable = true;
+
+            cctx.mvcc().addFuture(this, futId);
+
+            requestMvccVersionAndMap(topVer);
 
             return;
         }
 
+        initialMap(topVer);
+    }
+
+    /**
+     * @param topVer Topology version.
+     */
+    private void initialMap(AffinityTopologyVersion topVer) {
         map(keys, Collections.<ClusterNode, LinkedHashMap<KeyCacheObject, Boolean>>emptyMap(), topVer);
 
         markInitialized();
     }
 
+    /** {@inheritDoc} */
+    @Nullable @Override public MvccCoordinatorVersion onMvccCoordinatorChange(MvccCoordinator newCrd) {
+        if (!cctx.mvccEnabled())
+            return null;
+
+        synchronized (this) {
+            if (mvccVer != null) {
+                mvccCrd = newCrd;
+
+                return mvccVer;
+            }
+            else if (mvccCrd != null)
+                mvccCrd = null;
+
+            return null;
+        }
+    }
+
     /**
-     *
+     * @param topVer Topology version.
      */
-    private void requestMvccVersion(final AffinityTopologyVersion topVer) {
-        mvccCrd = cctx.affinity().mvccCoordinator(topVer);
+    private void requestMvccVersionAndMap(final AffinityTopologyVersion topVer) {
+        MvccCoordinator mvccCrd = cctx.affinity().mvccCoordinator(topVer);
 
         if (mvccCrd == null) {
             onDone(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
@@ -174,28 +199,64 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
             return;
         }
 
-            final AffinityTopologyVersion topVer0 = topVer;IgniteInternalFuture<MvccCoordinatorVersion> cntrFut = cctx.shared().coordinators().requestQueryCounter(mvccCrd);
+        synchronized (this) {
+            this.mvccCrd = mvccCrd;
+        }
+
+        MvccCoordinator curCrd = cctx.topology().mvccCoordinator();
+
+        if (!mvccCrd.equals(curCrd)) {
+            assert cctx.topology().topologyVersionFuture().initialVersion().compareTo(topVer) > 0;
+
+            // TODO IGNITE-3479.
+        }
+
+        IgniteInternalFuture<MvccCoordinatorVersion> cntrFut = cctx.shared().coordinators().requestQueryCounter(mvccCrd.node());
 
         cntrFut.listen(new IgniteInClosure<IgniteInternalFuture<MvccCoordinatorVersion>>() {
             @Override public void apply(IgniteInternalFuture<MvccCoordinatorVersion> fut) {
+                boolean needRemap = false;
+
                 try {
-                    mvccVer = fut.get();
+                    MvccCoordinatorVersion rcvdVer = fut.get();
 
-                    map(keys,
-                        Collections.<ClusterNode, LinkedHashMap<KeyCacheObject, Boolean>>emptyMap(),
-                        topVer);
+                    synchronized (GridPartitionedGetFuture.class) {
+                        if (GridPartitionedGetFuture.this.mvccCrd != null) {
+                            mvccVer = rcvdVer;
+                        }
+                        else
+                            needRemap = true;
+                    }
 
-                    markInitialized();
+                    if (!needRemap)
+                        initialMap(topVer);
                 }
                 catch (ClusterTopologyCheckedException e) {
-                    if (canRemap) {
-
-                    }
-                    else
-                        onDone(new ClusterTopologyCheckedException("Failed to request mvcc version, coordinator failed: " + mvccCrd));
+                    needRemap = true;
                 }
                 catch (IgniteCheckedException e) {
-                    onDone(e);
+                    GridPartitionedGetFuture.this.onDone(e);
+                }
+
+                if (needRemap) {
+                    if (canRemap) {
+                        IgniteInternalFuture<AffinityTopologyVersion> waitFut = waitRemapFuture(topVer);
+
+                        waitFut.listen(new CI1<IgniteInternalFuture<AffinityTopologyVersion>>() {
+                            @Override public void apply(IgniteInternalFuture<AffinityTopologyVersion> fut) {
+                                try {
+                                    requestMvccVersionAndMap(fut.get());
+                                }
+                                catch (IgniteCheckedException e) {
+                                    GridPartitionedGetFuture.this.onDone(e);
+                                }
+                            }
+                        });
+                    }
+                    else {
+                        GridPartitionedGetFuture.this.onDone(new ClusterTopologyCheckedException("Failed to " +
+                            "request mvcc version, coordinator failed"));
+                    }
                 }
             }
         });
@@ -258,10 +319,23 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
             if (trackable)
                 cctx.mvcc().removeFuture(futId);
 
-            if (mvccVer != null) {
-                assert mvccCrd != null;
+            if (cctx.mvccEnabled()) {
+                MvccCoordinator mvccCrd0 = null;
+                MvccCoordinatorVersion mvccVer0 = null;
 
-                cctx.shared().coordinators().ackQueryDone(mvccCrd, mvccVer);
+                synchronized (this) {
+                    if (mvccVer != null) {
+                        assert mvccCrd != null;
+
+                        mvccCrd0 = mvccCrd;
+                        mvccVer0 = mvccVer;
+
+                        mvccVer = null;
+                    }
+                }
+
+                if (mvccVer0 != null)
+                    cctx.shared().coordinators().ackQueryDone(mvccCrd0.node(), mvccVer0);
             }
 
             cache().sendTtlUpdateRequest(expiryPlc);
@@ -679,6 +753,17 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
         return Collections.emptyMap();
     }
 
+    /**
+     * @param curTopVer Current topology version.
+     * @return Future to wait for before remapping.
+     */
+    private IgniteInternalFuture<AffinityTopologyVersion> waitRemapFuture(AffinityTopologyVersion curTopVer) {
+        AffinityTopologyVersion updTopVer =
+            new AffinityTopologyVersion(Math.max(curTopVer.topologyVersion() + 1, cctx.discovery().topologyVersion()));
+
+        return cctx.affinity().affinityReadyFuture(updTopVer);
+    }
+
     /** {@inheritDoc} */
     @Override public String toString() {
         Collection<String> futs = F.viewReadOnly(futures(), new C1<IgniteInternalFuture<?>, String>() {
@@ -783,17 +868,15 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                 onDone(Collections.<K, V>emptyMap());
             }
             else {
-                final AffinityTopologyVersion updTopVer =
-                    new AffinityTopologyVersion(Math.max(topVer.topologyVersion() + 1, cctx.discovery().topologyVersion()));
+                IgniteInternalFuture<AffinityTopologyVersion> waitFut = waitRemapFuture(topVer);
 
-                cctx.affinity().affinityReadyFuture(updTopVer).listen(
-                    new CI1<IgniteInternalFuture<AffinityTopologyVersion>>() {
+                waitFut.listen(new CI1<IgniteInternalFuture<AffinityTopologyVersion>>() {
                         @Override public void apply(IgniteInternalFuture<AffinityTopologyVersion> fut) {
                             try {
-                                fut.get();
+                                AffinityTopologyVersion topVer = fut.get();
 
                                 // Remap.
-                                map(keys.keySet(), F.t(node, keys), updTopVer);
+                                map(keys.keySet(), F.t(node, keys), topVer);
 
                                 onDone(Collections.<K, V>emptyMap());
                             }

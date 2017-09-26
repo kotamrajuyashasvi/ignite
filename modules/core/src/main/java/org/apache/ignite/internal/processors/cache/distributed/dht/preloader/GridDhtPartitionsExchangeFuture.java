@@ -68,6 +68,7 @@ import org.apache.ignite.internal.processors.cache.ExchangeActions;
 import org.apache.ignite.internal.processors.cache.ExchangeContext;
 import org.apache.ignite.internal.processors.cache.ExchangeDiscoveryEvents;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
+import org.apache.ignite.internal.processors.cache.GridCacheFuture;
 import org.apache.ignite.internal.processors.cache.GridCacheMvccCandidate;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
 import org.apache.ignite.internal.processors.cache.StateChangeRequest;
@@ -76,6 +77,10 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtLocalP
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionTopology;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTopologyFutureAdapter;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCounter;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryFuture;
 import org.apache.ignite.internal.processors.cache.persistence.snapshot.SnapshotDiscoveryMessage;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxKey;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
@@ -553,25 +558,27 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
 
             boolean crdNode = crd != null && crd.isLocal();
 
-            boolean mvccCrdChange = false;
+            boolean newMvccCrd = false;
 
-            if (localJoinExchange())
-                cctx.coordinators().reassignCoordinator(firstEvtDiscoCache);
+            if (localJoinExchange()) {
+                MvccCoordinator mvccCrd = cctx.coordinators().currentCoordinator();
+
+                if (mvccCrd == null) {
+                    newMvccCrd = cctx.coordinators().reassignCoordinator(firstEvtDiscoCache) != null &&
+                        srvNodes.size() == 1;
+                }
+            }
             else if (exchId.isLeft()){
-                ClusterNode mvccCrd = cctx.coordinators().currentCoordinator();
+                MvccCoordinator mvccCrd = cctx.coordinators().currentCoordinator();
 
-                if (mvccCrd != null && mvccCrd.equals(exchId.eventNode())) {
-                    assert !CU.clientNode(mvccCrd) : mvccCrd;
+                if (mvccCrd != null && mvccCrd.node().equals(exchId.eventNode())) {
+                    assert !CU.clientNode(mvccCrd.node()) : mvccCrd;
 
-                    ClusterNode newMvccCrd = cctx.coordinators().reassignCoordinator(firstEvtDiscoCache);
-
-                    assert !F.eq(mvccCrd, newMvccCrd);
-
-                    mvccCrdChange = newMvccCrd != null;
+                    newMvccCrd = cctx.coordinators().reassignCoordinator(firstEvtDiscoCache) != null;
                 }
             }
 
-            exchCtx = new ExchangeContext(crdNode, mvccCrdChange, this);
+            exchCtx = new ExchangeContext(crdNode, newMvccCrd, this);
 
             assert state == null : state;
 
@@ -663,7 +670,7 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 }
             }
 
-            updateTopologies(crdNode);
+            updateTopologies(crdNode, cctx.coordinators().currentCoordinator());
 
             switch (exchange) {
                 case ALL: {
@@ -767,9 +774,10 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
 
     /**
      * @param crd Coordinator flag.
+     * @param mvccCrd Mvcc coordinator.
      * @throws IgniteCheckedException If failed.
      */
-    private void updateTopologies(boolean crd) throws IgniteCheckedException {
+    private void updateTopologies(boolean crd, MvccCoordinator mvccCrd) throws IgniteCheckedException {
         for (CacheGroupContext grp : cctx.cache().cacheGroups()) {
             if (grp.isLocal())
                 continue;
@@ -795,12 +803,46 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
             top.updateTopologyVersion(
                 this,
                 events().discoveryCache(),
+                mvccCrd,
                 updSeq,
                 cacheGroupStopping(grp.groupId()));
         }
 
-        for (GridClientPartitionTopology top : cctx.exchange().clientTopologies())
-            top.updateTopologyVersion(this, events().discoveryCache(), -1, cacheGroupStopping(top.groupId()));
+        for (GridClientPartitionTopology top : cctx.exchange().clientTopologies()) {
+            top.updateTopologyVersion(this,
+                events().discoveryCache(),
+                mvccCrd,
+                -1,
+                cacheGroupStopping(top.groupId()));
+        }
+
+        if (exchCtx.newMvccCoordinator()) {
+            assert mvccCrd != null;
+
+            Map<MvccCounter, Integer> activeQrys = null;
+
+            for (GridCacheFuture<?> fut : cctx.mvcc().activeFutures()) {
+                if (fut instanceof MvccQueryFuture) {
+                    MvccCoordinatorVersion ver = ((MvccQueryFuture)fut).onMvccCoordinatorChange(mvccCrd);
+
+                    if (ver != null ) {
+                        MvccCounter cntr = new MvccCounter(ver.coordinatorVersion(), ver.counter());
+
+                        if (activeQrys == null)
+                            activeQrys = new HashMap<>();
+
+                        Integer cnt = activeQrys.get(cntr);
+
+                        if (cnt == null)
+                            activeQrys.put(cntr, 1);
+                        else
+                            activeQrys.put(cntr, cnt + 1);
+                    }
+                }
+            }
+
+            exchCtx.addActiveQueries(activeQrys);
+        }
     }
 
     /**
@@ -1262,6 +1304,8 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 msg.partitionHistoryCounters(partHistReserved0);
         }
 
+        msg.activeQueries(exchCtx.activeQueries());
+
         if (stateChangeExchange() && changeGlobalStateE != null)
             msg.setError(changeGlobalStateE);
         else if (localJoinExchange())
@@ -1437,6 +1481,9 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
         }
 
         if (err == null) {
+            if (exchCtx.newMvccCoordinator() && cctx.localNode().equals(cctx.coordinators().currentCoordinatorNode()))
+                cctx.coordinators().initCoordinator(res, exchCtx.activeQueries());
+
             if (centralizedAff) {
                 assert !exchCtx.mergeExchanges();
 
@@ -2276,6 +2323,8 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
 
             for (Map.Entry<UUID, GridDhtPartitionsSingleMessage> e : msgs.entrySet()) {
                 GridDhtPartitionsSingleMessage msg = e.getValue();
+
+                exchCtx.addActiveQueries(msg.activeQueries());
 
                 // Apply update counters after all single messages are received.
                 for (Map.Entry<Integer, GridDhtPartitionMap> entry : msg.partitions().entrySet()) {

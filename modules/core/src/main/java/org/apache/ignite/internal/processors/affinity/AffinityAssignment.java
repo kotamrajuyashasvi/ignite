@@ -17,12 +17,12 @@
 
 package org.apache.ignite.internal.processors.affinity;
 
-import org.apache.ignite.cluster.ClusterNode;
-
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.apache.ignite.cluster.ClusterNode;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 
 /**
  * Cached affinity calculations.
@@ -86,5 +86,8 @@ public interface AffinityAssignment {
      */
     public Set<Integer> backupPartitions(UUID nodeId);
 
-    public ClusterNode mvccCoordinator();
+    /**
+     * @return Mvcc coordinator.
+     */
+    public MvccCoordinator mvccCoordinator();
 }

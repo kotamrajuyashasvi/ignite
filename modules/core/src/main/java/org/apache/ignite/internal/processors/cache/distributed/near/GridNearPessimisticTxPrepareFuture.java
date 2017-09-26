@@ -37,6 +37,7 @@ import org.apache.ignite.internal.processors.cache.distributed.GridDistributedTx
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionTopology;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxMapping;
 import org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsSharedManager;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccResponseListener;
 import org.apache.ignite.internal.processors.cache.mvcc.TxMvccInfo;
@@ -295,13 +296,15 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
                 nodes = cacheCtx.affinity().nodesByKey(txEntry.key(), topVer);
 
             if (mvccCrd == null && cacheCtx.mvccEnabled()) {
-                mvccCrd = cacheCtx.affinity().mvccCoordinator(topVer);
+                MvccCoordinator mvccCrd0 = cacheCtx.affinity().mvccCoordinator(topVer);
 
-                if (mvccCrd == null) {
+                if (mvccCrd0 == null) {
                     onDone(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
 
                     return;
                 }
+                else
+                    mvccCrd = mvccCrd0.node();
             }
 
             if (F.isEmpty(nodes)) {

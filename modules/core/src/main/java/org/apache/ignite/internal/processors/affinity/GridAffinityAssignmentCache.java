@@ -41,6 +41,7 @@ import org.apache.ignite.internal.GridKernalContext;
 import org.apache.ignite.internal.GridNodeOrderComparator;
 import org.apache.ignite.internal.IgniteInternalFuture;
 import org.apache.ignite.internal.managers.discovery.DiscoCache;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.CU;
@@ -184,7 +185,7 @@ public class GridAffinityAssignmentCache {
      * @param affAssignment Affinity assignment for topology version.
      */
     public void initialize(AffinityTopologyVersion topVer, List<List<ClusterNode>> affAssignment) {
-        ClusterNode mvccCrd = ctx.cache().context().coordinators().currentCoordinatorForCacheAffinity(topVer);
+        MvccCoordinator mvccCrd = ctx.cache().context().coordinators().currentCoordinatorForCacheAffinity(topVer);
 
         initialize(topVer, affAssignment, mvccCrd);
     }
@@ -195,7 +196,7 @@ public class GridAffinityAssignmentCache {
      * @param topVer Topology version.
      * @param affAssignment Affinity assignment for topology version.
      */
-    private void initialize(AffinityTopologyVersion topVer, List<List<ClusterNode>> affAssignment, ClusterNode mvccCrd) {
+    private void initialize(AffinityTopologyVersion topVer, List<List<ClusterNode>> affAssignment, MvccCoordinator mvccCrd) {
         assert topVer.compareTo(lastVersion()) >= 0 : "[topVer = " + topVer + ", last=" + lastVersion() + ']';
         assert idealAssignment != null;
 

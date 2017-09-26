@@ -358,6 +358,8 @@ public abstract class IgniteTxLocalAdapter extends IgniteTxAdapter implements Ig
      * @param ret Result.
      */
     public void implicitSingleResult(GridCacheReturn ret) {
+        assert ret != null;
+
         if (ret.invokeResult())
             implicitRes.mergeEntryProcessResults(ret);
         else

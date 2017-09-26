@@ -1675,7 +1675,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      *
      * @throws Exception If failed.
      */
-    public void _testReadInProgressCoordinatorFails() throws Exception {
+    public void testReadInProgressCoordinatorFails() throws Exception {
         testSpi = true;
 
         startGrids(4);
@@ -1763,6 +1763,82 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         releaseWaitFut.get();
         getFut.get();
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testMvccCoordinatorChangeSimple() throws Exception {
+        Ignite srv0 = startGrid(0);
+
+        final List<String> cacheNames = new ArrayList<>();
+
+        for (CacheConfiguration ccfg : cacheConfigurations()) {
+            ccfg.setName("cache-" + cacheNames.size());
+
+            cacheNames.add(ccfg.getName());
+
+            srv0.createCache(ccfg);
+        }
+
+        checkPutGet(cacheNames);
+
+        for (int i = 0; i < 3; i++) {
+            startGrid(i + 1);
+
+            checkPutGet(cacheNames);
+        }
+
+        client = true;
+
+        for (int i = 0; i < 3; i++) {
+            Ignite node = startGrid(i + 4);
+
+            // Init client caches outside of transactions.
+            for (String cacheName : cacheNames)
+                node.cache(cacheName);
+
+            checkPutGet(cacheNames);
+        }
+
+        for (int i = 0; i < 3; i++) {
+            stopGrid(i);
+
+            checkPutGet(cacheNames);
+        }
+    }
+
+    /**
+     * @param cacheNames Cache names.
+     */
+    private void checkPutGet(List<String> cacheNames) {
+        List<Ignite> nodes = G.allGrids();
+
+        assertFalse(nodes.isEmpty());
+
+        Ignite putNode = nodes.get(ThreadLocalRandom.current().nextInt(nodes.size()));
+
+        Map<Integer, Integer> vals = new HashMap();
+
+        Integer val = ThreadLocalRandom.current().nextInt();
+
+        for (int i = 0; i < 10; i++)
+            vals.put(i, val);
+
+        try (Transaction tx = putNode.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+            for (String cacheName : cacheNames)
+                putNode.cache(cacheName).putAll(vals);
+
+            tx.commit();
+        }
+
+        for (Ignite node : nodes) {
+            for (String cacheName : cacheNames) {
+                Map<Object, Object> res = node.cache(cacheName).getAll(vals.keySet());
+
+                assertEquals(vals, res);
+            }
+        }
     }
 
     /**

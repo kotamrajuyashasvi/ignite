@@ -61,6 +61,7 @@ import org.apache.ignite.internal.processors.cache.distributed.GridDistributedTx
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearCacheAdapter;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxPrepareRequest;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxPrepareResponse;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccResponseListener;
 import org.apache.ignite.internal.processors.cache.mvcc.TxMvccInfo;
@@ -256,6 +257,11 @@ public final class GridDhtTxPrepareFuture extends GridCacheCompoundFuture<Ignite
         assert nearMap != null;
 
         timeoutObj = timeout > 0 ? new PrepareTimeoutObject(timeout) : null;
+    }
+
+    /** {@inheritDoc} */
+    @Nullable @Override public IgniteLogger logger() {
+        return log;
     }
 
     /** {@inheritDoc} */
@@ -1235,14 +1241,16 @@ public final class GridDhtTxPrepareFuture extends GridCacheCompoundFuture<Ignite
             if (req.requestMvccCounter()) {
                 assert tx.txState().mvccEnabled(cctx);
 
-                ClusterNode crd = cctx.coordinators().currentCoordinator();
+                MvccCoordinator crd = cctx.coordinators().currentCoordinator();
 
                 assert crd != null : tx.topologyVersion();
 
-                if (crd.isLocal())
+                if (crd.node().isLocal())
                     onMvccResponse(cctx.localNodeId(), cctx.coordinators().requestTxCounterOnCoordinator(tx));
                 else {
-                    IgniteInternalFuture<Long> crdCntrFut = cctx.coordinators().requestTxCounter(crd, this, tx.nearXidVersion());
+                    IgniteInternalFuture<Long> crdCntrFut = cctx.coordinators().requestTxCounter(crd.node(),
+                        this,
+                        tx.nearXidVersion());
 
                     if (tx.onePhaseCommit())
                         waitCrdCntrFut = crdCntrFut;

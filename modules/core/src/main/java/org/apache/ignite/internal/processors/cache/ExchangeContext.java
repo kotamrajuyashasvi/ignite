@@ -18,10 +18,12 @@
 package org.apache.ignite.internal.processors.cache;
 
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import org.apache.ignite.cluster.ClusterNode;
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPartitionsExchangeFuture;
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPartitionsFullMessage;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCounter;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.jetbrains.annotations.Nullable;
 
@@ -52,21 +54,24 @@ public class ExchangeContext {
     private final boolean compatibilityNode = getBoolean(IGNITE_EXCHANGE_COMPATIBILITY_VER_1, false);
 
     /** */
-    private final boolean mvccCrdChange;
+    private final boolean newMvccCrd;
+
+    /** */
+    private Map<MvccCounter, Integer> activeQrys;
 
     /**
      * @param crd Coordinator flag.
      * @param fut Exchange future.
      */
-    public ExchangeContext(boolean crd, boolean mvccCrdChange, GridDhtPartitionsExchangeFuture fut) {
-        this.mvccCrdChange = mvccCrdChange;
+    public ExchangeContext(boolean crd, boolean newMvccCrd, GridDhtPartitionsExchangeFuture fut) {
+        this.newMvccCrd = newMvccCrd;
 
         int protocolVer = exchangeProtocolVersion(fut.firstEventCache().minimumNodeVersion());
 
         if (compatibilityNode || (crd && fut.localJoinExchange())) {
             fetchAffOnJoin = true;
 
-            merge = !mvccCrdChange;
+            merge = !newMvccCrd;
         }
         else {
             boolean startCaches = fut.exchangeId().isJoined() &&
@@ -74,7 +79,7 @@ public class ExchangeContext {
 
             fetchAffOnJoin = protocolVer == 1;
 
-            merge = !mvccCrdChange &&
+            merge = !newMvccCrd &&
                 !startCaches &&
                 protocolVer > 1 &&
                 fut.firstEvent().type() != EVT_DISCOVERY_CUSTOM_EVT;
@@ -131,10 +136,32 @@ public class ExchangeContext {
     }
 
     /**
-     * @return {@code True} if mvcc coordinator node is changed during this exchange.
+     * @return {@code True} if new node assigned as mvcc coordinator node during this exchange.
      */
-    public boolean mvccCoordinatorChange() {
-        return mvccCrdChange;
+    public boolean newMvccCoordinator() {
+        return newMvccCrd;
+    }
+
+    public Map<MvccCounter, Integer> activeQueries() {
+        return activeQrys;
+    }
+
+    public void addActiveQueries(Map<MvccCounter, Integer> activeQrys0) {
+        if (activeQrys0 == null)
+            return;
+
+        if (activeQrys != null) {
+            for (Map.Entry<MvccCounter, Integer> e : activeQrys0.entrySet()) {
+                Integer cnt = activeQrys.get(e.getKey());
+
+                if (cnt == null)
+                    activeQrys.put(e.getKey(), e.getValue());
+                else
+                    activeQrys.put(e.getKey(), cnt + e.getValue());
+            }
+        }
+        else
+            activeQrys = activeQrys0;
     }
 
     /** {@inheritDoc} */

@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.apache.ignite.cluster.ClusterNode;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.util.typedef.internal.S;
 
 /**
@@ -40,7 +41,7 @@ public class GridAffinityAssignment implements AffinityAssignment, Serializable 
     private final AffinityTopologyVersion topVer;
 
     /** */
-    private final ClusterNode mvccCrd;
+    private final MvccCoordinator mvccCrd;
 
     /** Collection of calculated affinity nodes. */
     private List<List<ClusterNode>> assignment;
@@ -84,7 +85,7 @@ public class GridAffinityAssignment implements AffinityAssignment, Serializable 
     GridAffinityAssignment(AffinityTopologyVersion topVer,
         List<List<ClusterNode>> assignment,
         List<List<ClusterNode>> idealAssignment,
-        ClusterNode mvccCrd) {
+        MvccCoordinator mvccCrd) {
         assert topVer != null;
         assert assignment != null;
         assert idealAssignment != null;
@@ -271,7 +272,7 @@ public class GridAffinityAssignment implements AffinityAssignment, Serializable 
     }
 
     /** {@inheritDoc} */
-    @Override public ClusterNode mvccCoordinator() {
+    @Override public MvccCoordinator mvccCoordinator() {
         return mvccCrd;
     }
 
