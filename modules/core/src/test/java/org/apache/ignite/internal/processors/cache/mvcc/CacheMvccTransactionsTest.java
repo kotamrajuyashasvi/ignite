@@ -1860,6 +1860,97 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     }
 
     /**
+     * @throws Exception If failed.
+     */
+    public void testGetVersionRequestFailover() throws Exception {
+        final int NODES = 5;
+
+        testSpi = true;
+
+        startGridsMultiThreaded(NODES - 1);
+
+        client = true;
+
+        Ignite client = startGrid(NODES - 1);
+
+        final List<String> cacheNames = new ArrayList<>();
+
+        final Map<Integer, Integer> vals = new HashMap<>();
+
+        for (int i = 0; i < 100; i++)
+            vals.put(i, i);
+
+        for (CacheConfiguration ccfg : cacheConfigurations()) {
+            ccfg.setName("cache-" + cacheNames.size());
+
+            ccfg.setNodeFilter(new TestCacheNodeExcludingFilter(getTestIgniteInstanceName(0)));
+
+            cacheNames.add(ccfg.getName());
+
+            IgniteCache cache = client.createCache(ccfg);
+
+            try (Transaction tx = client.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                cache.putAll(vals);
+
+                tx.commit();
+            }
+        }
+
+        final AtomicInteger nodeIdx = new AtomicInteger(1);
+
+        final AtomicBoolean done = new AtomicBoolean();
+
+        try {
+            IgniteInternalFuture getFut = GridTestUtils.runMultiThreadedAsync(new Callable<Void>() {
+                @Override public Void call() throws Exception {
+                    Ignite node = ignite(nodeIdx.getAndIncrement());
+
+                    int cnt = 0;
+
+                    while (!done.get()) {
+                        for (String cacheName : cacheNames) {
+                            IgniteCache cache = node.cache(cacheName);
+
+                            Map<Integer, Integer> res = cache.getAll(vals.keySet());
+
+                            assertEquals(vals, res);
+                        }
+
+                        cnt++;
+                    }
+
+                    log.info("Finished [node=" + node.name() + ", cnt=" + cnt + ']');
+
+                    return null;
+                }
+            }, NODES - 1, "get-thread");
+
+            doSleep(1000);
+
+            TestRecordingCommunicationSpi crdSpi = TestRecordingCommunicationSpi.spi(ignite(0));
+
+            crdSpi.blockMessages(new IgniteBiPredicate<ClusterNode, Message>() {
+                @Override public boolean apply(ClusterNode node, Message msg) {
+                    return msg instanceof MvccCoordinatorVersionResponse;
+                }
+            });
+
+            crdSpi.waitForBlocked();
+
+            stopGrid(0);
+
+            doSleep(1000);
+
+            done.set(true);
+
+            getFut.get();
+        }
+        finally {
+            done.set(true);
+        }
+    }
+
+    /**
      * @param N Number of object to update in single transaction.
      * @param srvs Number of server nodes.
      * @param clients Number of client nodes.
@@ -2218,29 +2309,35 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
         assertTrue("Active queries not empty", GridTestUtils.waitForCondition(
             new GridAbsPredicate() {
                 @Override public boolean apply() {
-                    Map activeQrys = GridTestUtils.getFieldValue(crd, "activeQueries");
+                    Map queries = GridTestUtils.getFieldValue(crd, "activeQueries");
 
-                    return activeQrys.isEmpty();
+                    if (!queries.isEmpty())
+                        log.info("Active queries: " + queries);
+
+                    return queries.isEmpty();
                 }
-            }, 5_000)
+            }, 8_000)
         );
         assertTrue("Previous coordinator queries not empty", GridTestUtils.waitForCondition(
             new GridAbsPredicate() {
                 @Override public boolean apply() {
-                    Map prevCrdQueries = GridTestUtils.getFieldValue(crd, "prevCrdQueries", "activeQueries");
+                    Map queries = GridTestUtils.getFieldValue(crd, "prevCrdQueries", "activeQueries");
 
-                    return prevCrdQueries.isEmpty();
+                    if (!queries.isEmpty())
+                        log.info("Previous coordinator queries: " + queries);
+
+                    return queries.isEmpty();
                 }
-            }, 5_000)
+            }, 8_000)
         );
 
-        if (crd.currentCoordinatorNode().equals(node.cluster().localNode())) {
+        if (node.cluster().localNode().id().equals(crd.currentCoordinatorId())) {
             assertTrue("prevQueriesDone flag is not set", GridTestUtils.waitForCondition(
                 new GridAbsPredicate() {
                     @Override public boolean apply() {
                         return GridTestUtils.getFieldValue(crd, "prevCrdQueries", "prevQueriesDone");
                     }
-                }, 5_000)
+                }, 8_000)
             );
         }
     }

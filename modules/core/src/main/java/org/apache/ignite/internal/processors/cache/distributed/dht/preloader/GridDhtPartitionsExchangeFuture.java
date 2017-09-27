@@ -26,7 +26,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -80,7 +79,7 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTopolo
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCounter;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryFuture;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryAware;
 import org.apache.ignite.internal.processors.cache.persistence.snapshot.SnapshotDiscoveryMessage;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxKey;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
@@ -571,11 +570,8 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
             else if (exchId.isLeft()){
                 MvccCoordinator mvccCrd = cctx.coordinators().currentCoordinator();
 
-                if (mvccCrd != null && mvccCrd.node().equals(exchId.eventNode())) {
-                    assert !CU.clientNode(mvccCrd.node()) : mvccCrd;
-
+                if (mvccCrd != null && mvccCrd.nodeId().equals(exchId.eventNode().id()))
                     newMvccCrd = cctx.coordinators().reassignCoordinator(firstEvtDiscoCache) != null;
-                }
             }
 
             exchCtx = new ExchangeContext(crdNode, newMvccCrd, this);
@@ -822,8 +818,8 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
             Map<MvccCounter, Integer> activeQrys = null;
 
             for (GridCacheFuture<?> fut : cctx.mvcc().activeFutures()) {
-                if (fut instanceof MvccQueryFuture) {
-                    MvccCoordinatorVersion ver = ((MvccQueryFuture)fut).onMvccCoordinatorChange(mvccCrd);
+                if (fut instanceof MvccQueryAware) {
+                    MvccCoordinatorVersion ver = ((MvccQueryAware)fut).onMvccCoordinatorChange(mvccCrd);
 
                     if (ver != null ) {
                         MvccCounter cntr = new MvccCounter(ver.coordinatorVersion(), ver.counter());
@@ -1483,7 +1479,7 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
         }
 
         if (err == null) {
-            if (exchCtx.newMvccCoordinator() && cctx.localNode().equals(cctx.coordinators().currentCoordinatorNode()))
+            if (exchCtx.newMvccCoordinator() && cctx.localNodeId().equals(cctx.coordinators().currentCoordinatorId()))
                 cctx.coordinators().initCoordinator(res, exchCtx.events().discoveryCache(), exchCtx.activeQueries());
 
             if (centralizedAff) {

@@ -1468,7 +1468,7 @@ public abstract class GridCacheQueryManager<K, V> extends GridCacheManagerAdapte
             if (cctx.mvccEnabled()) {
                 mvccCrd = cctx.affinity().mvccCoordinator(cctx.shared().exchange().readyAffinityVersion());
 
-                IgniteInternalFuture<MvccCoordinatorVersion> fut0 = cctx.shared().coordinators().requestQueryCounter(mvccCrd.node());
+                IgniteInternalFuture<MvccCoordinatorVersion> fut0 = cctx.shared().coordinators().requestQueryCounter(mvccCrd);
 
                 qry.mvccVersion(fut0.get());
             }

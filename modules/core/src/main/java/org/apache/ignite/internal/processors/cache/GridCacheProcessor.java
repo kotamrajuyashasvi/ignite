@@ -2176,7 +2176,6 @@ public class GridCacheProcessor extends GridProcessorAdapter {
     @SuppressWarnings("unchecked")
     private GridCacheSharedContext createSharedContext(GridKernalContext kernalCtx,
         Collection<CacheStoreSessionListener> storeSesLsnrs) throws IgniteCheckedException {
-        CacheCoordinatorsSharedManager coord = new CacheCoordinatorsSharedManager();
         IgniteTxManager tm = new IgniteTxManager();
         GridCacheMvccManager mvccMgr = new GridCacheMvccManager();
         GridCacheVersionManager verMgr = new GridCacheVersionManager();
@@ -2215,7 +2214,6 @@ public class GridCacheProcessor extends GridProcessorAdapter {
 
         return new GridCacheSharedContext(
             kernalCtx,
-            coord,
             tm,
             verMgr,
             mvccMgr,

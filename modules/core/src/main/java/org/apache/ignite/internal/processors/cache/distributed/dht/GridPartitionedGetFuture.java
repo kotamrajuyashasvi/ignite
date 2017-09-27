@@ -41,12 +41,13 @@ import org.apache.ignite.internal.processors.cache.GridCacheEntryRemovedExceptio
 import org.apache.ignite.internal.processors.cache.GridCacheMessage;
 import org.apache.ignite.internal.processors.cache.IgniteCacheExpiryPolicy;
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryFuture;
-import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetRequest;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetResponse;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryAware;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryTracker;
+import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
 import org.apache.ignite.internal.util.GridLeanMap;
 import org.apache.ignite.internal.util.future.GridFinishedFuture;
@@ -60,14 +61,13 @@ import org.apache.ignite.internal.util.typedef.P1;
 import org.apache.ignite.internal.util.typedef.internal.CU;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.U;
-import org.apache.ignite.lang.IgniteInClosure;
 import org.apache.ignite.lang.IgniteUuid;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * Colocated get future.
  */
-public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAdapter<K, V> implements MvccQueryFuture {
+public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAdapter<K, V> implements MvccQueryAware {
     /** */
     private static final long serialVersionUID = 0L;
 
@@ -78,10 +78,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
     private static IgniteLogger log;
 
     /** */
-    private MvccCoordinator mvccCrd;
-
-    /** */
-    private MvccCoordinatorVersion mvccVer;
+    private MvccQueryTracker mvccTracker;
 
     /**
      * @param cctx Context.
@@ -130,6 +127,18 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
     }
 
     /**
+     * @return Mvcc version if mvcc is enabled for cache.
+     */
+    @Nullable private MvccCoordinatorVersion mvccVersion() {
+        if (!cctx.mvccEnabled())
+            return null;
+
+        assert mvccTracker != null;
+
+        return mvccTracker.mvccVersion();
+    }
+
+    /**
      * Initializes future.
      *
      * @param topVer Topology version.
@@ -148,16 +157,36 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
         }
 
         if (cctx.mvccEnabled()) {
+            mvccTracker = new MvccQueryTracker(cctx, canRemap, this);
+
             trackable = true;
 
             cctx.mvcc().addFuture(this, futId);
 
-            requestMvccVersionAndMap(topVer);
+            mvccTracker.requestVersion(topVer);
 
             return;
         }
 
         initialMap(topVer);
+    }
+
+    /** {@inheritDoc} */
+    @Override public void onMvccVersionReceived(AffinityTopologyVersion topVer) {
+        initialMap(topVer);
+    }
+
+    /** {@inheritDoc} */
+    @Override public void onMvccVersionError(IgniteCheckedException e) {
+        onDone(e);
+    }
+
+    /** {@inheritDoc} */
+    @Nullable @Override public MvccCoordinatorVersion onMvccCoordinatorChange(MvccCoordinator newCrd) {
+        if (mvccTracker != null)
+            return mvccTracker.onMvccCoordinatorChange(newCrd);
+
+        return null;
     }
 
     /**
@@ -167,99 +196,6 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
         map(keys, Collections.<ClusterNode, LinkedHashMap<KeyCacheObject, Boolean>>emptyMap(), topVer);
 
         markInitialized();
-    }
-
-    /** {@inheritDoc} */
-    @Nullable @Override public MvccCoordinatorVersion onMvccCoordinatorChange(MvccCoordinator newCrd) {
-        if (!cctx.mvccEnabled())
-            return null;
-
-        synchronized (this) {
-            if (mvccVer != null) {
-                mvccCrd = newCrd;
-
-                return mvccVer;
-            }
-            else if (mvccCrd != null)
-                mvccCrd = null;
-
-            return null;
-        }
-    }
-
-    /**
-     * @param topVer Topology version.
-     */
-    private void requestMvccVersionAndMap(final AffinityTopologyVersion topVer) {
-        MvccCoordinator mvccCrd = cctx.affinity().mvccCoordinator(topVer);
-
-        if (mvccCrd == null) {
-            onDone(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
-
-            return;
-        }
-
-        synchronized (this) {
-            this.mvccCrd = mvccCrd;
-        }
-
-        MvccCoordinator curCrd = cctx.topology().mvccCoordinator();
-
-        if (!mvccCrd.equals(curCrd)) {
-            assert cctx.topology().topologyVersionFuture().initialVersion().compareTo(topVer) > 0;
-
-            // TODO IGNITE-3479.
-        }
-
-        IgniteInternalFuture<MvccCoordinatorVersion> cntrFut = cctx.shared().coordinators().requestQueryCounter(mvccCrd.node());
-
-        cntrFut.listen(new IgniteInClosure<IgniteInternalFuture<MvccCoordinatorVersion>>() {
-            @Override public void apply(IgniteInternalFuture<MvccCoordinatorVersion> fut) {
-                boolean needRemap = false;
-
-                try {
-                    MvccCoordinatorVersion rcvdVer = fut.get();
-
-                    synchronized (GridPartitionedGetFuture.class) {
-                        if (GridPartitionedGetFuture.this.mvccCrd != null) {
-                            mvccVer = rcvdVer;
-                        }
-                        else
-                            needRemap = true;
-                    }
-
-                    if (!needRemap)
-                        initialMap(topVer);
-                }
-                catch (ClusterTopologyCheckedException e) {
-                    needRemap = true;
-                }
-                catch (IgniteCheckedException e) {
-                    GridPartitionedGetFuture.this.onDone(e);
-                }
-
-                if (needRemap) {
-                    if (canRemap) {
-                        IgniteInternalFuture<AffinityTopologyVersion> waitFut = waitRemapFuture(topVer);
-
-                        waitFut.listen(new CI1<IgniteInternalFuture<AffinityTopologyVersion>>() {
-                            @Override public void apply(IgniteInternalFuture<AffinityTopologyVersion> fut) {
-                                try {
-                                    requestMvccVersionAndMap(fut.get());
-                                }
-                                catch (IgniteCheckedException e) {
-                                    GridPartitionedGetFuture.this.onDone(e);
-                                }
-                            }
-                        });
-                    }
-                    else {
-                        GridPartitionedGetFuture.this.onDone(new ClusterTopologyCheckedException("Failed to " +
-                            "request mvcc version, coordinator failed"));
-                    }
-                }
-            }
-        });
     }
 
     /** {@inheritDoc} */
@@ -319,24 +255,8 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
             if (trackable)
                 cctx.mvcc().removeFuture(futId);
 
-            if (cctx.mvccEnabled()) {
-                MvccCoordinator mvccCrd0 = null;
-                MvccCoordinatorVersion mvccVer0 = null;
-
-                synchronized (this) {
-                    if (mvccVer != null) {
-                        assert mvccCrd != null;
-
-                        mvccCrd0 = mvccCrd;
-                        mvccVer0 = mvccVer;
-
-                        mvccVer = null;
-                    }
-                }
-
-                if (mvccVer0 != null)
-                    cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
-            }
+            if (mvccTracker != null)
+                mvccTracker.onQueryDone();
 
             cache().sendTtlUpdateRequest(expiryPlc);
 
@@ -431,7 +351,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                         expiryPlc,
                         skipVals,
                         recovery,
-                        mvccVer);
+                        mvccVersion());
 
                 final Collection<Integer> invalidParts = fut.invalidPartitions();
 
@@ -488,7 +408,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                     skipVals,
                     cctx.deploymentEnabled(),
                     recovery,
-                    mvccVer);
+                    mvccVersion());
 
                 add(fut); // Append new future.
 
@@ -595,7 +515,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
 
                 if (readNoEntry) {
                     CacheDataRow row = cctx.mvccEnabled() ?
-                        cctx.offheap().mvccRead(cctx, key, mvccVer) :
+                        cctx.offheap().mvccRead(cctx, key, mvccVersion()) :
                         cctx.offheap().read(cctx, key);
 
                     if (row != null) {
@@ -639,7 +559,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                                 taskName,
                                 expiryPlc,
                                 !deserializeBinary,
-                                mvccVer,
+                                mvccVersion(),
                                 null);
 
                             if (getRes != null) {
@@ -659,7 +579,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                                 taskName,
                                 expiryPlc,
                                 !deserializeBinary,
-                                mvccVer);
+                                mvccVersion());
                         }
 
                         cache.context().evicts().touch(entry, topVer);

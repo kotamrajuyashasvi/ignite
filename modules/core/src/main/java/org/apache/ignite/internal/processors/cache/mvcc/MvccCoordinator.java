@@ -17,15 +17,19 @@
 
 package org.apache.ignite.internal.processors.cache.mvcc;
 
-import org.apache.ignite.cluster.ClusterNode;
+import java.io.Serializable;
+import java.util.UUID;
 import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 
 /**
  *
  */
-public class MvccCoordinator {
+public class MvccCoordinator implements Serializable {
     /** */
-    private final ClusterNode crd;
+    private static final long serialVersionUID = 0L;
+
+    /** */
+    private final UUID nodeId;
 
     /**
      * Unique coordinator version, increases when new coordinator is assigned,
@@ -37,12 +41,16 @@ public class MvccCoordinator {
     private final AffinityTopologyVersion topVer;
 
     /**
-     * @param crd Coordinator nde.
+     * @param nodeId Coordinator node ID.
      * @param crdVer Coordinator version.
      * @param topVer Topology version when coordinator was assigned.
      */
-    public MvccCoordinator(ClusterNode crd, long crdVer, AffinityTopologyVersion topVer) {
-        this.crd = crd;
+    public MvccCoordinator(UUID nodeId, long crdVer, AffinityTopologyVersion topVer) {
+        assert nodeId != null;
+        assert crdVer > 0 : crdVer;
+        assert topVer != null;
+
+        this.nodeId = nodeId;
         this.crdVer = crdVer;
         this.topVer = topVer;
     }
@@ -55,10 +63,10 @@ public class MvccCoordinator {
     }
 
     /**
-     * @return Coordinator node.
+     * @return Coordinator node ID.
      */
-    public ClusterNode node() {
-        return crd;
+    public UUID nodeId() {
+        return nodeId;
     }
 
     /**
@@ -88,6 +96,6 @@ public class MvccCoordinator {
 
     /** {@inheritDoc} */
     @Override public String toString() {
-        return "MvccCoordinator [node=" + crd.id() + ", ver=" + crdVer + ", topVer=" + topVer + ']';
+        return "MvccCoordinator [node=" + nodeId + ", ver=" + crdVer + ", topVer=" + topVer + ']';
     }
 }
