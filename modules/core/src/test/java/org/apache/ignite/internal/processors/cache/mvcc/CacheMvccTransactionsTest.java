@@ -2280,7 +2280,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      */
     private void verifyCoordinatorInternalState() throws Exception {
         for (Ignite node : G.allGrids()) {
-            final CacheCoordinatorsSharedManager crd = ((IgniteKernal)node).context().cache().context().coordinators();
+            final CacheCoordinatorsProcessor crd = ((IgniteKernal)node).context().cache().context().coordinators();
 
             Map activeTxs = GridTestUtils.getFieldValue(crd, "activeTxs");
 
@@ -2304,7 +2304,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @throws Exception If failed.
      */
     private void checkActiveQueriesCleanup(Ignite node) throws Exception {
-        final CacheCoordinatorsSharedManager crd = ((IgniteKernal)node).context().cache().context().coordinators();
+        final CacheCoordinatorsProcessor crd = ((IgniteKernal)node).context().cache().context().coordinators();
 
         assertTrue("Active queries not empty", GridTestUtils.waitForCondition(
             new GridAbsPredicate() {

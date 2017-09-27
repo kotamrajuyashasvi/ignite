@@ -36,7 +36,7 @@ import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
 import org.apache.ignite.internal.processors.cache.distributed.GridDistributedTxMapping;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionTopology;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxMapping;
-import org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsSharedManager;
+import org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsProcessor;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccResponseListener;
@@ -490,9 +490,9 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
                         ", loc=" + ((MiniFuture)f).primary().isLocal() +
                         ", done=" + f.isDone() + "]";
                 }
-                else if (f instanceof CacheCoordinatorsSharedManager.MvccVersionFuture) {
-                    CacheCoordinatorsSharedManager.MvccVersionFuture crdFut =
-                        (CacheCoordinatorsSharedManager.MvccVersionFuture)f;
+                else if (f instanceof CacheCoordinatorsProcessor.MvccVersionFuture) {
+                    CacheCoordinatorsProcessor.MvccVersionFuture crdFut =
+                        (CacheCoordinatorsProcessor.MvccVersionFuture)f;
 
                     return "[mvccCrdNode=" + crdFut.crdId +
                         ", loc=" + crdFut.crdId.equals(cctx.localNodeId()) +

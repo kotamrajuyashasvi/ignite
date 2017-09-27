@@ -49,7 +49,7 @@ import org.apache.ignite.internal.processors.affinity.GridAffinityProcessor;
 import org.apache.ignite.internal.processors.cache.CacheConflictResolutionManager;
 import org.apache.ignite.internal.processors.cache.GridCacheProcessor;
 import org.apache.ignite.internal.processors.cache.binary.CacheObjectBinaryProcessorImpl;
-import org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsSharedManager;
+import org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsProcessor;
 import org.apache.ignite.internal.processors.cacheobject.IgniteCacheObjectProcessor;
 import org.apache.ignite.internal.processors.closure.GridClosureProcessor;
 import org.apache.ignite.internal.processors.cluster.ClusterProcessor;
@@ -285,7 +285,7 @@ public class GridKernalContextImpl implements GridKernalContext, Externalizable 
 
     /** Cache mvcc coordinators. */
     @GridToStringExclude
-    private CacheCoordinatorsSharedManager coordProc;
+    private CacheCoordinatorsProcessor coordProc;
 
     /** */
     @GridToStringExclude
@@ -584,8 +584,8 @@ public class GridKernalContextImpl implements GridKernalContext, Externalizable 
             poolProc = (PoolProcessor) comp;
         else if (comp instanceof GridMarshallerMappingProcessor)
             mappingProc = (GridMarshallerMappingProcessor)comp;
-        else if (comp instanceof CacheCoordinatorsSharedManager)
-            coordProc = (CacheCoordinatorsSharedManager)comp;
+        else if (comp instanceof CacheCoordinatorsProcessor)
+            coordProc = (CacheCoordinatorsProcessor)comp;
         else if (!(comp instanceof DiscoveryNodeValidationProcessor
                 || comp instanceof PlatformPluginProcessor))
             assert (comp instanceof GridPluginComponent) : "Unknown manager class: " + comp.getClass();
@@ -841,7 +841,7 @@ public class GridKernalContextImpl implements GridKernalContext, Externalizable 
     }
 
     /** {@inheritDoc} */
-    @Override public CacheCoordinatorsSharedManager coordinators() {
+    @Override public CacheCoordinatorsProcessor coordinators() {
         return coordProc;
     }
 

@@ -52,6 +52,7 @@ import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteInClosure;
 import org.apache.ignite.plugin.extensions.communication.Message;
+import org.apache.ignite.spi.discovery.DiscoveryDataBag;
 import org.jetbrains.annotations.Nullable;
 import org.jsr166.LongAdder8;
 
@@ -63,7 +64,7 @@ import static org.apache.ignite.internal.managers.communication.GridIoPolicy.SYS
 /**
  *
  */
-public class CacheCoordinatorsSharedManager extends GridProcessorAdapter {
+public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
     /** */
     public static final long COUNTER_NA = 0L;
 
@@ -118,7 +119,7 @@ public class CacheCoordinatorsSharedManager extends GridProcessorAdapter {
     /**
      * @param ver1 First version.
      * @param ver2 Second version.
-     * @return
+     * @return Comparison result.
      */
     public static int compareVersions(MvccCoordinatorVersion ver1, MvccCoordinatorVersion ver2) {
         assert ver1 != null;
@@ -132,13 +133,32 @@ public class CacheCoordinatorsSharedManager extends GridProcessorAdapter {
         return Long.compare(ver1.counter(), ver2.counter());
     }
 
-    public CacheCoordinatorsSharedManager(GridKernalContext ctx) {
+    /** */
+    private CacheCoordinatorsDiscoveryData discoData;
+
+    /**
+     * @param ctx Context.
+     */
+    public CacheCoordinatorsProcessor(GridKernalContext ctx) {
         super(ctx);
     }
 
     /** {@inheritDoc} */
     @Override public DiscoveryDataExchangeType discoveryDataType() {
         return DiscoveryDataExchangeType.CACHE_CRD_PROC;
+    }
+
+    /** {@inheritDoc} */
+    @Override public void collectGridNodeData(DiscoveryDataBag dataBag) {
+        Integer cmpId = DiscoveryDataExchangeType.CACHE_CRD_PROC.ordinal();
+
+        if (!dataBag.commonDataCollectedFor(cmpId))
+            dataBag.addGridCommonData(cmpId, discoData);
+    }
+
+    /** {@inheritDoc} */
+    @Override public void onGridDataReceived(DiscoveryDataBag.GridDiscoveryData data) {
+        discoData = (CacheCoordinatorsDiscoveryData)data.commonData();
     }
 
     /** {@inheritDoc} */
