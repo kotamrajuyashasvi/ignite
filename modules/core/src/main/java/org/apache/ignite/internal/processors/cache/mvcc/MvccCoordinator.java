@@ -27,39 +27,67 @@ public class MvccCoordinator {
     /** */
     private final ClusterNode crd;
 
+    /**
+     * Unique coordinator version, increases when new coordinator is assigned,
+     * can differ from topVer if we decide to assign coordinator manually.
+     */
+    private final long crdVer;
+
     /** */
     private final AffinityTopologyVersion topVer;
 
-    public MvccCoordinator(ClusterNode crd, final AffinityTopologyVersion topVer) {
+    /**
+     * @param crd Coordinator nde.
+     * @param crdVer Coordinator version.
+     * @param topVer Topology version when coordinator was assigned.
+     */
+    public MvccCoordinator(ClusterNode crd, long crdVer, AffinityTopologyVersion topVer) {
         this.crd = crd;
+        this.crdVer = crdVer;
         this.topVer = topVer;
     }
 
+    /**
+     * @return Unique coordinator version.
+     */
+    public long coordinatorVersion() {
+        return crdVer;
+    }
+
+    /**
+     * @return Coordinator node.
+     */
     public ClusterNode node() {
         return crd;
     }
 
+    /**
+     * @return Topology version when coordinator was assigned.
+     */
     public AffinityTopologyVersion topologyVersion() {
         return topVer;
     }
 
-    @Override public boolean equals(Object other) {
-        if (this == other)
+    /** {@inheritDoc} */
+    @Override public boolean equals(Object o) {
+        if (this == o)
             return true;
 
-        if (other == null || getClass() != other.getClass())
+        if (o == null || getClass() != o.getClass())
             return false;
 
-        MvccCoordinator that = (MvccCoordinator)other;
+        MvccCoordinator that = (MvccCoordinator)o;
 
-        return topVer.equals(topVer) && crd.equals(that.crd);
+        return crdVer == that.crdVer;
     }
 
+    /** {@inheritDoc} */
     @Override public int hashCode() {
-        int res = crd.hashCode();
+        return (int)(crdVer ^ (crdVer >>> 32));
+    }
 
-        res = 31 * res + topVer.hashCode();
-
-        return res;
+    /** {@inheritDoc} */
+    @Override public String toString() {
+        return "MvccCoordinator [node=" + crd.id() + ", ver=" + crdVer + ", topVer=" + topVer + ']';
     }
 }

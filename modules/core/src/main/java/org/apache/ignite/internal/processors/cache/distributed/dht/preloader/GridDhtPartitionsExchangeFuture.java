@@ -841,7 +841,7 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 }
             }
 
-            exchCtx.addActiveQueries(activeQrys);
+            exchCtx.addActiveQueries(cctx.localNodeId(), activeQrys);
         }
     }
 
@@ -1304,7 +1304,9 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 msg.partitionHistoryCounters(partHistReserved0);
         }
 
-        msg.activeQueries(exchCtx.activeQueries());
+        Map<UUID, Map<MvccCounter, Integer>> activeQueries = exchCtx.activeQueries();
+
+        msg.activeQueries(activeQueries != null ? activeQueries.get(cctx.localNodeId()) : null);
 
         if (stateChangeExchange() && changeGlobalStateE != null)
             msg.setError(changeGlobalStateE);
@@ -1482,7 +1484,7 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
 
         if (err == null) {
             if (exchCtx.newMvccCoordinator() && cctx.localNode().equals(cctx.coordinators().currentCoordinatorNode()))
-                cctx.coordinators().initCoordinator(res, exchCtx.activeQueries());
+                cctx.coordinators().initCoordinator(res, exchCtx.events().discoveryCache(), exchCtx.activeQueries());
 
             if (centralizedAff) {
                 assert !exchCtx.mergeExchanges();
@@ -1904,6 +1906,9 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
      */
     private void processSingleMessage(UUID nodeId, GridDhtPartitionsSingleMessage msg) {
         if (msg.client()) {
+            if (msg.activeQueries() != null)
+                cctx.coordinators().processClientActiveQueries(nodeId, msg.activeQueries());
+
             waitAndReplyToNode(nodeId, msg);
 
             return;
@@ -2252,7 +2257,7 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 }
             }
 
-            if (exchCtx.mergeExchanges()) {
+            if (exchCtx.mergeExchanges() && !exchCtx.newMvccCoordinator()) {
                 if (log.isInfoEnabled())
                     log.info("Coordinator received all messages, try merge [ver=" + initialVersion() + ']');
 
@@ -2324,7 +2329,10 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
             for (Map.Entry<UUID, GridDhtPartitionsSingleMessage> e : msgs.entrySet()) {
                 GridDhtPartitionsSingleMessage msg = e.getValue();
 
-                exchCtx.addActiveQueries(msg.activeQueries());
+                if (exchCtx.newMvccCoordinator())
+                    exchCtx.addActiveQueries(e.getKey(), msg.activeQueries());
+                else
+                    assert msg.activeQueries() == null;
 
                 // Apply update counters after all single messages are received.
                 for (Map.Entry<Integer, GridDhtPartitionMap> entry : msg.partitions().entrySet()) {

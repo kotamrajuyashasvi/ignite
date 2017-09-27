@@ -335,7 +335,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                 }
 
                 if (mvccVer0 != null)
-                    cctx.shared().coordinators().ackQueryDone(mvccCrd0.node(), mvccVer0);
+                    cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
             }
 
             cache().sendTtlUpdateRequest(expiryPlc);

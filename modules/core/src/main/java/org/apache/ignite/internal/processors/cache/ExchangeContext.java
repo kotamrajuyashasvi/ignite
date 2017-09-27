@@ -17,9 +17,11 @@
 
 package org.apache.ignite.internal.processors.cache;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.apache.ignite.cluster.ClusterNode;
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPartitionsExchangeFuture;
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPartitionsFullMessage;
@@ -56,8 +58,8 @@ public class ExchangeContext {
     /** */
     private final boolean newMvccCrd;
 
-    /** */
-    private Map<MvccCounter, Integer> activeQrys;
+    /** Currently running mvcc queries, initialized when mvcc coordinator is changed. */
+    private Map<UUID, Map<MvccCounter, Integer>> activeQueries;
 
     /**
      * @param crd Coordinator flag.
@@ -71,7 +73,7 @@ public class ExchangeContext {
         if (compatibilityNode || (crd && fut.localJoinExchange())) {
             fetchAffOnJoin = true;
 
-            merge = !newMvccCrd;
+            merge = false;
         }
         else {
             boolean startCaches = fut.exchangeId().isJoined() &&
@@ -79,8 +81,7 @@ public class ExchangeContext {
 
             fetchAffOnJoin = protocolVer == 1;
 
-            merge = !newMvccCrd &&
-                !startCaches &&
+            merge = !startCaches &&
                 protocolVer > 1 &&
                 fut.firstEvent().type() != EVT_DISCOVERY_CUSTOM_EVT;
         }
@@ -142,26 +143,18 @@ public class ExchangeContext {
         return newMvccCrd;
     }
 
-    public Map<MvccCounter, Integer> activeQueries() {
-        return activeQrys;
+    public Map<UUID, Map<MvccCounter, Integer>> activeQueries() {
+        return activeQueries;
     }
 
-    public void addActiveQueries(Map<MvccCounter, Integer> activeQrys0) {
-        if (activeQrys0 == null)
+    public void addActiveQueries(UUID nodeId, @Nullable Map<MvccCounter, Integer> activeQueries0) {
+        if (activeQueries0 == null)
             return;
 
-        if (activeQrys != null) {
-            for (Map.Entry<MvccCounter, Integer> e : activeQrys0.entrySet()) {
-                Integer cnt = activeQrys.get(e.getKey());
+        if (activeQueries == null)
+            activeQueries = new HashMap<>();
 
-                if (cnt == null)
-                    activeQrys.put(e.getKey(), e.getValue());
-                else
-                    activeQrys.put(e.getKey(), cnt + e.getValue());
-            }
-        }
-        else
-            activeQrys = activeQrys0;
+        activeQueries.put(nodeId, activeQueries0);
     }
 
     /** {@inheritDoc} */

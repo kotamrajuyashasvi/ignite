@@ -47,6 +47,7 @@ import org.apache.ignite.internal.util.future.GridCompoundFuture;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteInClosure;
+import org.apache.ignite.plugin.extensions.communication.Message;
 import org.jetbrains.annotations.Nullable;
 import org.jsr166.LongAdder8;
 
@@ -85,6 +86,9 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
 
     /** */
     private final ConcurrentMap<Long, AtomicInteger> activeQueries = new ConcurrentHashMap<>();
+
+    /** */
+    private final PreviousCoordinatorQueries prevCrdQueries = new PreviousCoordinatorQueries();
 
     /** */
     private final ConcurrentMap<Long, MvccVersionFuture> verFuts = new ConcurrentHashMap<>();
@@ -138,7 +142,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
         statCntrs[5] = new StatCounter("CoordinatorWaitTxsRequest");
         statCntrs[6] = new CounterWithAvg("CoordinatorWaitTxsResponse", "avgFutTime");
 
-        cctx.gridEvents().addLocalEventListener(new CacheCoordinatorDiscoveryListener(),
+        cctx.gridEvents().addLocalEventListener(new CacheCoordinatorNodeFailListener(),
             EVT_NODE_FAILED, EVT_NODE_LEFT);
 
         cctx.gridIO().addMessageListener(MSG_TOPIC, new CoordinatorMessageListener());
@@ -169,9 +173,12 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
     /**
      * @param crd Coordinator.
      * @param lsnr Response listener.
+     * @param txVer Transaction version.
      * @return Counter request future.
      */
-    public IgniteInternalFuture<MvccCoordinatorVersion> requestTxCounter(ClusterNode crd, MvccResponseListener lsnr, GridCacheVersion txVer) {
+    public IgniteInternalFuture<MvccCoordinatorVersion> requestTxCounter(ClusterNode crd,
+        MvccResponseListener lsnr,
+        GridCacheVersion txVer) {
         assert !crd.isLocal() : crd;
 
         MvccVersionFuture fut = new MvccVersionFuture(futIdCntr.incrementAndGet(),
@@ -197,32 +204,37 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
      * @param crd Coordinator.
      * @param mvccVer Query version.
      */
-    public void ackQueryDone(ClusterNode crd, MvccCoordinatorVersion mvccVer) {
-        try {
-            long trackCntr = mvccVer.counter();
+    public void ackQueryDone(MvccCoordinator crd, MvccCoordinatorVersion mvccVer) {
+        assert crd != null;
 
-            MvccLongList txs = mvccVer.activeTransactions();
+        long trackCntr = mvccVer.counter();
 
-            if (txs != null) {
-                for (int i = 0; i < txs.size(); i++) {
-                    long txId = txs.get(i);
+        MvccLongList txs = mvccVer.activeTransactions();
 
-                    if (txId < trackCntr)
-                        trackCntr = txId;
-                }
+        if (txs != null) {
+            for (int i = 0; i < txs.size(); i++) {
+                long txId = txs.get(i);
+
+                if (txId < trackCntr)
+                    trackCntr = txId;
             }
+        }
 
-            cctx.gridIO().sendToGridTopic(crd,
+        Message msg = crd.coordinatorVersion() == mvccVer.coordinatorVersion() ? new CoordinatorQueryAckRequest(trackCntr) :
+            new NewCoordinatorQueryAckRequest(mvccVer.coordinatorVersion(), trackCntr);
+
+        try {
+            cctx.gridIO().sendToGridTopic(crd.node(),
                 MSG_TOPIC,
-                new CoordinatorQueryAckRequest(trackCntr),
+                msg,
                 MSG_POLICY);
         }
         catch (ClusterTopologyCheckedException e) {
             if (log.isDebugEnabled())
-                log.debug("Failed to send query ack, node left [crd=" + crd + ']');
+                log.debug("Failed to send query ack, node left [crd=" + crd + ", msg=" + msg + ']');
         }
         catch (IgniteCheckedException e) {
-            U.error(log, "Failed to send query ack [crd=" + crd + ", cntr=" + mvccVer + ']', e);
+            U.error(log, "Failed to send query ack [crd=" + crd + ", msg=" + msg + ']', e);
         }
     }
 
@@ -401,7 +413,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
             if (log.isDebugEnabled())
                 log.debug("Failed to send query counter response, node left [msg=" + msg + ", node=" + nodeId + ']');
 
-            onQueryDone(res.counter());
+            onNodeFailed(nodeId);
         }
         catch (IgniteCheckedException e) {
             U.error(log, "Failed to send query counter response [msg=" + msg + ", node=" + nodeId + ']', e);
@@ -436,6 +448,14 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
      */
     private void processCoordinatorQueryAckRequest(CoordinatorQueryAckRequest msg) {
         onQueryDone(msg.counter());
+    }
+
+    /**
+     * @param nodeId Node ID.
+     * @param msg Message.
+     */
+    private void processNewCoordinatorQueryAckRequest(UUID nodeId, NewCoordinatorQueryAckRequest msg) {
+        prevCrdQueries.onQueryDone(nodeId, msg);
     }
 
     /**
@@ -508,12 +528,18 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
 
         assert old == null : txId;
 
-        long cleanupVer = committedCntr.get() - 1;
+        long cleanupVer;
 
-        for (Long qryVer : activeQueries.keySet()) {
-            if (qryVer <= cleanupVer)
-                cleanupVer = qryVer - 1;
+        if (prevCrdQueries.previousQueriesDone()) {
+            cleanupVer = committedCntr.get() - 1;
+
+            for (Long qryVer : activeQueries.keySet()) {
+                if (qryVer <= cleanupVer)
+                    cleanupVer = qryVer - 1;
+            }
         }
+        else
+            cleanupVer = -1;
 
         res.init(futId, crdVer, nextCtr, cleanupVer);
 
@@ -613,6 +639,10 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
         }
     }
 
+    private void onNodeFailed(UUID nodeId) {
+        // TODO
+    }
+
     /**
      * @param mvccCntr Query counter.
      */
@@ -709,40 +739,68 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
         return curCrd != null ? curCrd.node() : null;
     }
 
+    /**
+     * @param topVer Cache affinity version (used for assert).
+     * @return Coordinator.
+     */
     public MvccCoordinator currentCoordinatorForCacheAffinity(AffinityTopologyVersion topVer) {
         MvccCoordinator crd = curCrd;
 
         // Assert coordinator did not already change.
-        assert crd == null || crd.topologyVersion().compareTo(topVer) <= 0 : crd;
+        assert crd == null || crd.topologyVersion().compareTo(topVer) <= 0 :
+            "Invalid coordinator [crd=" + crd + ", topVer=" + topVer + ']';
 
         return crd;
     }
 
     /**
      * @param discoCache Discovery snapshot.
+     * @return New coordinator.
      */
     public MvccCoordinator reassignCoordinator(DiscoCache discoCache) {
         assert curCrd == null || !discoCache.allNodes().contains(curCrd.node()) : curCrd;
 
         if (!discoCache.serverNodes().isEmpty()) {
-            curCrd = new MvccCoordinator(discoCache.serverNodes().get(0), discoCache.version());
+            curCrd = new MvccCoordinator(discoCache.serverNodes().get(0),
+                discoCache.version().topologyVersion(),
+                discoCache.version());
 
-            log.info("Assigned mvcc coordinator [topVer=" + discoCache.version() +
-                ", crd=" + curCrd.node().id() + ']');
+            log.info("Assigned mvcc coordinator: " + curCrd);
         }
-        else
+        else {
             curCrd = null;
+
+            log.info("New mvcc coordinator was not assigned [topVer=" + discoCache.version() + ']');
+        }
 
         return curCrd;
     }
 
-    public void initCoordinator(AffinityTopologyVersion topVer, @Nullable Map<MvccCounter, Integer> activeQrys) {
+    /**
+     * @param nodeId Node ID.
+     * @param activeQueries Active queries.
+     */
+    public void processClientActiveQueries(UUID nodeId,
+        @Nullable Map<MvccCounter, Integer> activeQueries) {
+        prevCrdQueries.processClientActiveQueries(nodeId, activeQueries);
+    }
+
+    /**
+     * @param topVer Topology version.
+     * @param activeQueries Current queries.
+     */
+    public void initCoordinator(AffinityTopologyVersion topVer,
+        DiscoCache discoCache,
+        Map<UUID, Map<MvccCounter, Integer>> activeQueries)
+    {
         assert cctx.localNode().equals(curCrd.node());
 
         log.info("Initialize local node as mvcc coordinator [node=" + cctx.localNodeId() +
             ", topVer=" + topVer + ']');
 
         crdVer = topVer.topologyVersion();
+
+        prevCrdQueries.init(activeQueries, discoCache, cctx.discovery());
 
         crdLatch.countDown();
     }
@@ -868,7 +926,7 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
     /**
      *
      */
-    private class CacheCoordinatorDiscoveryListener implements GridLocalEventListener {
+    private class CacheCoordinatorNodeFailListener implements GridLocalEventListener {
         /** {@inheritDoc} */
         @Override public void onEvent(Event evt) {
             assert evt instanceof DiscoveryEvent : evt;
@@ -882,6 +940,8 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
 
             for (WaitAckFuture fut : ackFuts.values())
                 fut.onNodeLeft(nodeId);
+
+            prevCrdQueries.onNodeLeft(nodeId);
         }
 
         /** {@inheritDoc} */
@@ -930,6 +990,8 @@ public class CacheCoordinatorsSharedManager<K, V> extends GridCacheSharedManager
                 processCoordinatorVersionResponse(nodeId, (MvccCoordinatorVersionResponse) msg);
             else if (msg instanceof CoordinatorWaitTxsRequest)
                 processCoordinatorWaitTxsRequest(nodeId, (CoordinatorWaitTxsRequest)msg);
+            else if (msg instanceof NewCoordinatorQueryAckRequest)
+                processNewCoordinatorQueryAckRequest(nodeId, (NewCoordinatorQueryAckRequest)msg);
             else
                 U.warn(log, "Unexpected message received [node=" + nodeId + ", msg=" + msg + ']');
         }
